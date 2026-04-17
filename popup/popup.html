@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TabMind</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,400&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- Command Palette overlay -->
+  <div id="palette-overlay" class="palette-overlay hidden">
+    <div class="palette-box">
+      <div class="palette-search-row">
+        <span class="palette-icon">⌘</span>
+        <input id="palette-input" type="text" placeholder="Search tabs, domains, URLs..." autocomplete="off" spellcheck="false" />
+        <kbd>ESC</kbd>
+      </div>
+      <div id="palette-results" class="palette-results"></div>
+      <div class="palette-footer">
+        <span><kbd>↑↓</kbd> navigate</span>
+        <span><kbd>↵</kbd> open tab</span>
+        <span><kbd>⌫</kbd> close</span>
+        <span><kbd>ESC</kbd> dismiss</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div class="app">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="logo">
+        <span class="logo-mark">TM</span>
+        <span class="logo-text">TabMind</span>
+      </div>
+      <div class="topbar-stats" id="topbar-stats">
+        <!-- filled by JS -->
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-palette" title="Command palette (Ctrl+K)">⌘</button>
+        <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <!-- Search + controls -->
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input id="search-input" type="text" placeholder="Search tabs…" autocomplete="off" spellcheck="false" />
+        <button class="search-clear hidden" id="search-clear">✕</button>
+      </div>
+      <div class="filter-pills" id="filter-pills">
+        <button class="pill active" data-filter="all">All</button>
+        <button class="pill" data-filter="recent">Recent</button>
+        <button class="pill" data-filter="old">Old tabs</button>
+        <button class="pill" data-filter="dupes">Duplicates</button>
+      </div>
+    </div>
+
+    <!-- Body: sidebar + main -->
+    <div class="body-wrap">
+      <nav class="sidebar" id="sidebar">
+        <!-- filled by JS -->
+      </nav>
+
+      <main class="main-panel" id="main-panel">
+        <!-- filled by JS -->
+      </main>
+    </div>
+
+    <!-- Bottom action bar -->
+    <footer class="action-bar">
+      <div class="action-stats" id="action-stats"></div>
+      <div class="action-buttons">
+        <button class="action-btn secondary" id="btn-suspend">💤 Suspend old</button>
+        <button class="action-btn secondary" id="btn-close-dupes">🗂 Close dupes</button>
+        <button class="action-btn secondary" id="btn-save-session">📌 Save session</button>
+        <button class="action-btn primary" id="btn-ai-cluster">✦ AI Cluster</button>
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- Settings panel -->
+  <div id="settings-panel" class="settings-panel hidden">
+    <div class="settings-inner">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="btn-settings-close">✕</button>
+      </div>
+      <div class="settings-body">
+        <label class="setting-row">
+          <div>
+            <span class="setting-label">Anthropic API Key</span>
+            <span class="setting-hint">Required for AI clustering. Get one at console.anthropic.com</span>
+          </div>
+          <input type="password" id="setting-api-key" placeholder="sk-ant-..." />
+        </label>
+        <label class="setting-row">
+          <div>
+            <span class="setting-label">Auto-suspend after</span>
+            <span class="setting-hint">Tabs not visited in this many days get suspended</span>
+          </div>
+          <div class="setting-control">
+            <input type="number" id="setting-suspend-days" min="1" max="90" value="7" style="width:60px" />
+            <span class="setting-unit">days</span>
+          </div>
+        </label>
+        <label class="setting-row">
+          <div>
+            <span class="setting-label">Warn on duplicates</span>
+            <span class="setting-hint">Show a badge when duplicate URLs are open</span>
+          </div>
+          <input type="checkbox" id="setting-dupes-warn" checked />
+        </label>
+      </div>
+      <div class="settings-footer">
+        <button class="action-btn primary" id="btn-save-settings">Save settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
