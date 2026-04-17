@@ -6,6 +6,7 @@ let allTabs = [];
 let allMeta = {};
 let groups = [];
 let customGroups = [];
+let aiCache = null;
 let activeGroupId = '__all__';
 let activeFilter = 'all';
 let searchQuery = '';
@@ -45,8 +46,31 @@ async function reload() {
     }
   }
 
-  groups = [...manualMap.values()].filter(g => g.tabs.length > 0);
-  groups.push(...heuristicCluster(autoTabs));
+  groups = [...manualMap.values()];
+  
+  aiCache = await msg('GET_AI_CLUSTERS');
+  const leftoverTabs = [];
+  
+  if (aiCache) {
+    const aiGroupsMap = new Map();
+    for (const cg of aiCache) {
+       aiGroupsMap.set(cg.id, { ...cg, tabs: [], source: 'ai' });
+    }
+    for (const t of autoTabs) {
+       const match = aiCache.find(g => g.urls.includes(t.url));
+       if (match) {
+         aiGroupsMap.get(match.id).tabs.push(t);
+       } else {
+         leftoverTabs.push(t);
+       }
+    }
+    const validAiGroups = [...aiGroupsMap.values()].filter(g => g.tabs.length > 0);
+    groups.push(...validAiGroups);
+  } else {
+    leftoverTabs.push(...autoTabs);
+  }
+
+  groups.push(...heuristicCluster(leftoverTabs));
 
   renderSidebar();
   renderMain();
@@ -97,7 +121,7 @@ function renderSidebar() {
   sidebar.appendChild(clusterSection);
 
   for (const g of groups) {
-    sidebar.appendChild(sidebarItem(g.id, g.color, g.label, g.tabs.length, activeGroupId === g.id));
+    sidebar.appendChild(sidebarItem(g.id, g.color, g.label, g.tabs.length, activeGroupId === g.id, g.source));
   }
 
   // Workspaces section
@@ -139,7 +163,7 @@ function renderSidebar() {
   addGroupBtn.className = 'sidebar-workspace-btn';
   addGroupBtn.innerHTML = `<span>+</span> <span style="color:var(--accent2)">New Custom Group</span>`;
   addGroupBtn.addEventListener('click', async () => {
-    const name = prompt('Custom group name (e.g. My Project):');
+    const name = await showModal({ title: 'New Custom Group', text: 'Enter group name:', type: 'prompt' });
     if (!name) return;
     const id = 'cg_' + Date.now();
     await msg('SAVE_CUSTOM_GROUP', { group: { id, label: name, color: '#7c6dfa' }});
@@ -149,15 +173,29 @@ function renderSidebar() {
   sidebar.appendChild(addGroupBtn);
 }
 
-function sidebarItem(id, color, label, count, active) {
+function sidebarItem(id, color, label, count, active, source) {
   const el = document.createElement('div');
   el.className = 'sidebar-item' + (active ? ' active' : '');
   el.innerHTML = `
     ${color ? `<span class="sidebar-dot" style="background:${color}"></span>` : `<span class="sidebar-dot" style="background:var(--text3)"></span>`}
     <span class="sidebar-label">${esc(label)}</span>
     <span class="sidebar-count">${count}</span>
+    ${(source === 'manual' || source === 'ai') ? `<button class="workspace-delete-btn" data-source="${source}" title="Delete group">✕</button>` : ''}
   `;
-  el.addEventListener('click', () => {
+  el.addEventListener('click', async (e) => {
+    if (e.target.classList.contains('workspace-delete-btn')) {
+      e.stopPropagation();
+      const confirmDel = await showModal({ title: 'Delete Group', text: `Delete group "${esc(label)}"? Tabs won't be closed.`, type: 'confirm' });
+      if (confirmDel) {
+         if (source === 'manual') await msg('DELETE_CUSTOM_GROUP', { id });
+         else if (source === 'ai') await msg('DELETE_AI_GROUP', { id });
+         
+         if (activeGroupId === id) activeGroupId = '__all__';
+         await reload();
+         toast('Group deleted');
+      }
+      return;
+    }
     activeGroupId = id;
     renderSidebar();
     renderMain();
@@ -315,22 +353,41 @@ function createTabRow(tab) {
   
   row.querySelector('.tab-move').addEventListener('click', async (e) => {
     e.stopPropagation();
-    if (customGroups.length === 0) {
-      toast('Create a custom group first via the bottom of the sidebar!', 'warn');
+    if (customGroups.length === 0 && (!aiCache || aiCache.length === 0)) {
+      toast('Create a custom group or run AI clustering first!', 'warn');
       return;
     }
-    const labels = customGroups.map((g, i) => `${i+1}: ${g.label}`).join('\n');
-    const choice = prompt(`Move tab to custom group (enter number):\n${labels}\n\nType 0 to remove from manual group.`);
+    
+    const options = [];
+    customGroups.forEach(g => options.push({ label: `[Manual] ${g.label}`, value: `manual|${g.id}` }));
+    if (aiCache) aiCache.forEach(g => options.push({ label: `[AI] ${g.label}`, value: `ai|${g.id}` }));
+    options.unshift({ label: 'Remove from group', value: '0' });
+    
+    const choice = await showModal({ 
+      title: 'Move Tab', 
+      text: 'Select destination group:', 
+      type: 'select', 
+      options 
+    });
+    
+    if (choice === null) return;
     if (choice === '0') {
        await msg('SET_TAB_MANUAL_GROUP', { tabId: tab.id, groupId: null });
+       await msg('REMOVE_TAB_FROM_AI', { url: tab.url });
        await reload();
        return;
     }
-    const idx = parseInt(choice) - 1;
-    if (customGroups[idx]) {
-      await msg('SET_TAB_MANUAL_GROUP', { tabId: tab.id, groupId: customGroups[idx].id });
-      await reload();
+    
+    const [type, destId] = choice.split('|');
+    if (type === 'manual') {
+       await msg('SET_TAB_MANUAL_GROUP', { tabId: tab.id, groupId: destId });
+       await msg('REMOVE_TAB_FROM_AI', { url: tab.url });
+    } else if (type === 'ai') {
+       await msg('SET_TAB_MANUAL_GROUP', { tabId: tab.id, groupId: null });
+       await msg('ADD_TAB_TO_AI', { url: tab.url, id: destId });
     }
+    
+    await reload();
   });
 
   row.querySelector('.tab-close').addEventListener('click', async (e) => {
@@ -403,17 +460,17 @@ async function runAiCluster() {
   
   if (provider === 'local' && (!window.ai || !window.ai.languageModel)) {
     toast('Local AI not found. Please enable chrome://flags/#prompt-api-for-extension', 'error');
-    document.getElementById('settings-panel').classList.remove('hidden');
+    openSettings();
     return;
   }
   if (provider === 'anthropic' && !settings.anthropicKey) {
     toast('Add your Anthropic API key in Settings first', 'error');
-    document.getElementById('settings-panel').classList.remove('hidden');
+    openSettings();
     return;
   }
   if (provider === 'gemini' && !settings.geminiKey) {
     toast('Add your Gemini API key in Settings first', 'error');
-    document.getElementById('settings-panel').classList.remove('hidden');
+    openSettings();
     return;
   }
 
@@ -425,6 +482,9 @@ async function runAiCluster() {
     const autoTabs = allTabs.filter(t => !t.manualGroupId || !customGroups.find(g => g.id === t.manualGroupId));
     const result = await aiCluster(autoTabs, settings);
     
+    const cacheGroups = result.map(g => ({ ...g, urls: g.tabs.map(t => t.url) }));
+    await msg('SAVE_AI_CLUSTERS', { groups: cacheGroups });
+    
     // Merge manual groups with AI results
     const manualMap = new Map();
     for (const cg of customGroups) manualMap.set(cg.id, { ...cg, tabs: [], source: 'manual' });
@@ -434,7 +494,7 @@ async function runAiCluster() {
       }
     }
     
-    groups = [...manualMap.values()].filter(g => g.tabs.length > 0);
+    groups = [...manualMap.values()];
     groups.push(...result);
     
     activeGroupId = '__all__';
@@ -453,7 +513,7 @@ async function runAiCluster() {
 
 // ===== Workspaces =====
 async function saveCurrentSession() {
-  const name = prompt('Workspace name:', `Session ${new Date().toLocaleDateString()}`);
+  const name = await showModal({ title: 'Save Session', text: 'Enter workspace name:', type: 'prompt', options: { defaultValue: `Session ${new Date().toLocaleDateString()}` } });
   if (!name) return;
   const ws = { id: `ws_${Date.now()}`, name, urls: allTabs.map(t => t.url), savedAt: Date.now() };
   await msg('SAVE_WORKSPACE', { workspace: ws });
@@ -463,13 +523,15 @@ async function saveCurrentSession() {
 }
 
 async function restoreWorkspace(ws) {
-  if (!confirm(`Open ${ws.urls.length} tabs from "${ws.name}"?`)) return;
+  const isOk = await showModal({ title: 'Restore Session', text: `Open ${ws.urls.length} tabs from "${esc(ws.name)}"?` });
+  if (!isOk) return;
   await msg('OPEN_URLS', { urls: ws.urls });
   toast(`Restored: ${ws.name}`, 'success');
 }
 
 async function deleteWorkspace(id) {
-  if (!confirm('Delete this saved session?')) return;
+  const isOk = await showModal({ title: 'Delete Session', text: 'Delete this saved session?' });
+  if (!isOk) return;
   await msg('DELETE_WORKSPACE', { id });
   workspaces = await msg('GET_WORKSPACES');
   renderSidebar();
@@ -523,6 +585,41 @@ function highlightMatch(text, query) {
   const idx = text.toLowerCase().indexOf(query.toLowerCase());
   if (idx === -1) return esc(text);
   return esc(text.slice(0, idx)) + `<mark class="tab-highlight">${esc(text.slice(idx, idx + query.length))}</mark>` + esc(text.slice(idx + query.length));
+}
+
+// ===== Modals =====
+function showModal({ title, text, type = 'confirm', options = {} }) {
+  return new Promise(resolve => {
+    const overlay = document.getElementById('modal-overlay');
+    const input = document.getElementById('modal-input');
+    const select = document.getElementById('modal-select');
+    
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-text').innerHTML = text;
+    input.style.display = type === 'prompt' ? 'block' : 'none';
+    select.style.display = type === 'select' ? 'block' : 'none';
+    
+    if (type === 'prompt') {
+      input.value = options.defaultValue || '';
+      setTimeout(() => input.focus(), 50);
+    } else if (type === 'select') {
+      select.innerHTML = Array.isArray(options) ? options.map(opt => `<option value="${opt.value}">${esc(opt.label)}</option>`).join('') : '';
+      setTimeout(() => select.focus(), 50);
+    }
+    
+    overlay.classList.remove('hidden');
+
+    const handleAction = (isOk) => {
+      overlay.classList.add('hidden');
+      if (!isOk) return resolve(null);
+      if (type === 'prompt') resolve(input.value.trim());
+      else if (type === 'select') resolve(select.value);
+      else resolve(true);
+    };
+
+    document.getElementById('btn-modal-ok').onclick = () => handleAction(true);
+    document.getElementById('btn-modal-cancel').onclick = () => handleAction(false);
+  });
 }
 
 // ===== Event bindings =====

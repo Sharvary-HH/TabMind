@@ -213,6 +213,64 @@ async function handleMessage(message) {
       return { ok: true };
     }
 
+    case 'DELETE_CUSTOM_GROUP': {
+      const result = await chrome.storage.local.get(CUSTOM_GROUPS_KEY);
+      const cgs = (result[CUSTOM_GROUPS_KEY] || []).filter(g => g.id !== message.id);
+      await chrome.storage.local.set({ [CUSTOM_GROUPS_KEY]: cgs });
+      
+      const meta = await getMetadata();
+      for (const t of Object.values(meta)) {
+        if (t.manualGroupId === message.id) delete t.manualGroupId;
+      }
+      await saveMetadata(meta);
+      return { ok: true };
+    }
+
+    case 'SAVE_AI_CLUSTERS': {
+      await chrome.storage.local.set({ 'tabmind_ai_clusters': message.groups });
+      return { ok: true };
+    }
+
+    case 'GET_AI_CLUSTERS': {
+      const res = await chrome.storage.local.get('tabmind_ai_clusters');
+      return res['tabmind_ai_clusters'] || null;
+    }
+
+    case 'DELETE_AI_GROUP': {
+      const res = await chrome.storage.local.get('tabmind_ai_clusters');
+      const groups = (res['tabmind_ai_clusters'] || []).filter(g => g.id !== message.id);
+      await chrome.storage.local.set({ 'tabmind_ai_clusters': groups });
+      return { ok: true };
+    }
+
+    case 'REMOVE_TAB_FROM_AI': {
+      const res = await chrome.storage.local.get('tabmind_ai_clusters');
+      const groups = res['tabmind_ai_clusters'];
+      if (!groups) return { ok: true };
+      for (const g of groups) {
+        g.urls = g.urls.filter(u => u !== message.url);
+      }
+      await chrome.storage.local.set({ 'tabmind_ai_clusters': groups });
+      return { ok: true };
+    }
+
+    case 'ADD_TAB_TO_AI': {
+      const res = await chrome.storage.local.get('tabmind_ai_clusters');
+      const groups = res['tabmind_ai_clusters'];
+      if (!groups) return { ok: true };
+      // Remove from all existing AI groups
+      for (const g of groups) {
+        g.urls = g.urls.filter(u => u !== message.url);
+      }
+      // Add to target AI group
+      const target = groups.find(g => g.id === message.id);
+      if (target) {
+        target.urls.push(message.url);
+      }
+      await chrome.storage.local.set({ 'tabmind_ai_clusters': groups });
+      return { ok: true };
+    }
+
     default:
       return { error: 'Unknown message type' };
   }

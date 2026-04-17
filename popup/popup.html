@@ -146,6 +146,24 @@
   <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
+  <!-- Custom Modal -->
+  <div id="modal-overlay" class="palette-overlay hidden" style="z-index: 2000">
+    <div class="settings-inner" style="width:340px; margin-top:15vh">
+      <div class="settings-header">
+        <h2 id="modal-title">Confirm</h2>
+      </div>
+      <div class="settings-body" style="padding: 16px;">
+        <p id="modal-text" style="font-size:13px; color:var(--text); margin-bottom:12px;"></p>
+        <input type="text" id="modal-input" style="width:100%; display:none" />
+        <select id="modal-select" class="setting-select" style="width:100%; display:none; background:var(--bg3); border:1px solid var(--border); color:var(--text); padding:5px; border-radius:var(--radius-sm); outline:none"></select>
+      </div>
+      <div class="settings-footer" style="gap:8px; display:flex;">
+        <button class="action-btn secondary" id="btn-modal-cancel">Cancel</button>
+        <button class="action-btn primary" id="btn-modal-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="popup.js"></script>
 </body>
 </html>
