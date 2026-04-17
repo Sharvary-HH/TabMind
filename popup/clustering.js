@@ -134,13 +134,19 @@ export function heuristicCluster(tabs) {
 
 // --- AI clustering via Anthropic API ---
 
-export async function aiCluster(tabs, apiKey) {
-  // Prepare a compact tab list
-  const tabList = tabs.map((t, i) => `${i}: ${t.title} [${getDomain(t.url)}]`).join('\n');
+export async function aiCluster(tabs, settings) {
+  const provider = settings.aiProvider || 'local';
+  if (provider === 'local') return localAiCluster(tabs);
+  if (provider === 'gemini') return geminiCluster(tabs, settings.geminiKey);
+  if (provider === 'anthropic') return anthropicCluster(tabs, settings.anthropicKey);
+  throw new Error('Unknown AI provider selected');
+}
 
-  const prompt = `You are a tab organiser. Given this list of browser tabs, group them into meaningful clusters.
+function getAiPrompt(tabs) {
+  const tabList = tabs.map((t, i) => `${i}: ${t.title} [${getDomain(t.url)}]`).join('\n');
+  return `You are a tab organiser. Given this list of browser tabs, group them into meaningful clusters.
 Each cluster should have a short, descriptive name (2-4 words).
-Return ONLY valid JSON — no explanation, no markdown, no backticks.
+Return ONLY valid JSON (no markdown fences, just the brace).
 
 Format:
 {
@@ -157,7 +163,53 @@ Use these hex colors for variety: #3B8BD4 #7F77DD #1D9E75 #D85A30 #D4537E #BA751
 
 Tabs:
 ${tabList}`;
+}
 
+function parseAiResponse(text, tabs, source) {
+  const clean = text.replace(/```json|```/g, '').trim();
+  const parsed = JSON.parse(clean);
+  return parsed.clusters.map(cluster => ({
+    id: cluster.label.toLowerCase().replace(/\s+/g, '-'),
+    label: cluster.label,
+    color: cluster.color,
+    tabs: cluster.tabIndexes.map(i => tabs[i]).filter(Boolean),
+    source,
+  }));
+}
+
+async function localAiCluster(tabs) {
+  if (!window.ai || !window.ai.languageModel) throw new Error('Local AI not available in this browser');
+  const capabilities = await window.ai.languageModel.capabilities();
+  if (capabilities.available === 'no') throw new Error('Local AI model not downloaded or supported');
+
+  const session = await window.ai.languageModel.create();
+  try {
+    const text = await session.prompt(getAiPrompt(tabs));
+    return parseAiResponse(text, tabs, 'local-ai');
+  } finally {
+    session.destroy();
+  }
+}
+
+async function geminiCluster(tabs, apiKey) {
+  const prompt = getAiPrompt(tabs);
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { response_mime_type: "application/json" }
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Gemini API error ${response.status}: ${await response.text()}`);
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+  return parseAiResponse(text, tabs, 'gemini');
+}
+
+async function anthropicCluster(tabs, apiKey) {
+  const prompt = getAiPrompt(tabs);
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -173,25 +225,10 @@ ${tabList}`;
     }),
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`API error ${response.status}: ${err}`);
-  }
-
+  if (!response.ok) throw new Error(`Anthropic API error ${response.status}: ${await response.text()}`);
   const data = await response.json();
-  const text = data.content?.[0]?.text || '';
-
-  // Strip any accidental markdown fences
-  const clean = text.replace(/```json|```/g, '').trim();
-  const parsed = JSON.parse(clean);
-
-  return parsed.clusters.map(cluster => ({
-    id: cluster.label.toLowerCase().replace(/\s+/g, '-'),
-    label: cluster.label,
-    color: cluster.color,
-    tabs: cluster.tabIndexes.map(i => tabs[i]).filter(Boolean),
-    source: 'ai',
-  }));
+  const text = data.content?.[0]?.text || '{}';
+  return parseAiResponse(text, tabs, 'anthropic');
 }
 
 // --- Duplicate detection ---

@@ -41,6 +41,7 @@
         <!-- filled by JS -->
       </div>
       <div class="topbar-actions">
+        <button class="icon-btn" id="btn-popout" title="Pop out into floating window">⧉</button>
         <button class="icon-btn" id="btn-palette" title="Command palette (Ctrl+K)">⌘</button>
         <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
       </div>
@@ -95,10 +96,28 @@
       <div class="settings-body">
         <label class="setting-row">
           <div>
-            <span class="setting-label">Anthropic API Key</span>
-            <span class="setting-hint">Required for AI clustering. Get one at console.anthropic.com</span>
+            <span class="setting-label">AI Provider</span>
+            <span class="setting-hint">Select how to cluster tabs</span>
           </div>
-          <input type="password" id="setting-api-key" placeholder="sk-ant-..." />
+          <select id="setting-ai-provider" class="setting-select">
+            <option value="local">Chrome Built-in AI (Free, Local)</option>
+            <option value="gemini">Google Gemini API</option>
+            <option value="anthropic">Anthropic API</option>
+          </select>
+        </label>
+        <label class="setting-row" id="row-anthropic-key">
+          <div>
+            <span class="setting-label">Anthropic API Key</span>
+            <span class="setting-hint">Required for Anthropic clustering</span>
+          </div>
+          <input type="password" id="setting-anthropic-key" placeholder="sk-ant-..." />
+        </label>
+        <label class="setting-row" id="row-gemini-key">
+          <div>
+            <span class="setting-label">Gemini API Key</span>
+            <span class="setting-hint">Required for Gemini clustering</span>
+          </div>
+          <input type="password" id="setting-gemini-key" placeholder="AIzaSy..." />
         </label>
         <label class="setting-row">
           <div>

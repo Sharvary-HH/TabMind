@@ -4,11 +4,13 @@
 const TAB_METADATA_KEY = 'tabmind_metadata';
 const SETTINGS_KEY = 'tabmind_settings';
 const WORKSPACES_KEY = 'tabmind_workspaces';
+const CUSTOM_GROUPS_KEY = 'tabmind_custom_groups';
 
-// Default settings
 const DEFAULT_SETTINGS = {
   autoSuspendDays: 7,
-  apiKey: '',
+  aiProvider: 'local',
+  anthropicKey: '',
+  geminiKey: '',
   showDuplicateWarning: true,
   trackHistory: true,
 };
@@ -100,6 +102,7 @@ async function handleMessage(message) {
         windowId: tab.windowId,
         lastActive: meta[tab.id]?.lastActive || 0,
         createdAt: meta[tab.id]?.createdAt || 0,
+        manualGroupId: meta[tab.id]?.manualGroupId || null,
         pinned: tab.pinned,
       }));
     }
@@ -187,6 +190,27 @@ async function handleMessage(message) {
 
     case 'GET_TAB_METADATA': {
       return await getMetadata();
+    }
+
+    case 'SET_TAB_MANUAL_GROUP': {
+      const meta = await getMetadata();
+      if (!meta[message.tabId]) meta[message.tabId] = { createdAt: Date.now() };
+      meta[message.tabId].manualGroupId = message.groupId;
+      await saveMetadata(meta);
+      return { ok: true };
+    }
+
+    case 'GET_CUSTOM_GROUPS': {
+      const result = await chrome.storage.local.get(CUSTOM_GROUPS_KEY);
+      return result[CUSTOM_GROUPS_KEY] || [];
+    }
+
+    case 'SAVE_CUSTOM_GROUP': {
+      const result = await chrome.storage.local.get(CUSTOM_GROUPS_KEY);
+      const cgs = result[CUSTOM_GROUPS_KEY] || [];
+      cgs.push(message.group);
+      await chrome.storage.local.set({ [CUSTOM_GROUPS_KEY]: cgs });
+      return { ok: true };
     }
 
     default:

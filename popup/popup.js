@@ -5,6 +5,7 @@ import { heuristicCluster, aiCluster, findDuplicates, fuzzySearch, timeSince, ge
 let allTabs = [];
 let allMeta = {};
 let groups = [];
+let customGroups = [];
 let activeGroupId = '__all__';
 let activeFilter = 'all';
 let searchQuery = '';
@@ -25,8 +26,28 @@ async function init() {
 async function reload() {
   allTabs = await msg('GET_ALL_TABS');
   allMeta = await msg('GET_TAB_METADATA');
+  customGroups = await msg('GET_CUSTOM_GROUPS') || [];
   dupeIds = new Set(findDuplicates(allTabs));
-  groups = heuristicCluster(allTabs);
+  
+  const manualMap = new Map();
+  const autoTabs = [];
+  
+  for (const cg of customGroups) {
+    manualMap.set(cg.id, { ...cg, tabs: [], source: 'manual' });
+  }
+
+  for (const t of allTabs) {
+    const mId = t.manualGroupId;
+    if (mId && manualMap.has(mId)) {
+      manualMap.get(mId).tabs.push(t);
+    } else {
+      autoTabs.push(t);
+    }
+  }
+
+  groups = [...manualMap.values()].filter(g => g.tabs.length > 0);
+  groups.push(...heuristicCluster(autoTabs));
+
   renderSidebar();
   renderMain();
   renderStats();
@@ -89,18 +110,43 @@ function renderSidebar() {
     for (const ws of workspaces) {
       const el = document.createElement('div');
       el.className = 'sidebar-workspace-btn';
-      el.innerHTML = `<span style="font-size:11px">📌</span><span class="sidebar-label">${esc(ws.name)}</span><span class="sidebar-count">${ws.urls.length}</span>`;
-      el.addEventListener('click', () => restoreWorkspace(ws));
+      el.innerHTML = `
+        <span style="font-size:11px">📌</span>
+        <span class="sidebar-label" style="flex:1" title="Click to open">${esc(ws.name)}</span>
+        <span class="sidebar-count">${ws.urls.length}</span>
+        <button class="workspace-delete-btn" title="Delete session" data-id="${ws.id}">✕</button>
+      `;
+      el.addEventListener('click', (e) => {
+        if (e.target.classList.contains('workspace-delete-btn')) {
+          e.stopPropagation();
+          deleteWorkspace(ws.id);
+        } else {
+          restoreWorkspace(ws);
+        }
+      });
       sidebar.appendChild(el);
     }
   }
 
-  // Add workspace button
   const addWs = document.createElement('div');
   addWs.className = 'sidebar-workspace-btn';
   addWs.innerHTML = `<span>+</span> <span>Save session</span>`;
   addWs.addEventListener('click', saveCurrentSession);
   sidebar.appendChild(addWs);
+
+  // Custom Groups section
+  const addGroupBtn = document.createElement('div');
+  addGroupBtn.className = 'sidebar-workspace-btn';
+  addGroupBtn.innerHTML = `<span>+</span> <span style="color:var(--accent2)">New Custom Group</span>`;
+  addGroupBtn.addEventListener('click', async () => {
+    const name = prompt('Custom group name (e.g. My Project):');
+    if (!name) return;
+    const id = 'cg_' + Date.now();
+    await msg('SAVE_CUSTOM_GROUP', { group: { id, label: name, color: '#7c6dfa' }});
+    toast('Custom group created!', 'success');
+    await reload();
+  });
+  sidebar.appendChild(addGroupBtn);
 }
 
 function sidebarItem(id, color, label, count, active) {
@@ -257,14 +303,36 @@ function createTabRow(tab) {
     <span class="tab-title">${titleHtml}</span>
     <span class="tab-domain">${esc(domain)}</span>
     <span class="tab-age">${age}</span>
+    <button class="tab-move" title="Move to custom group">⇲</button>
     <button class="tab-close" title="Close tab">✕</button>
   `;
 
   row.addEventListener('click', async (e) => {
-    if (e.target.classList.contains('tab-close')) return;
+    if (e.target.classList.contains('tab-close') || e.target.classList.contains('tab-move')) return;
     await msg('FOCUS_TAB', { tabId: tab.id, windowId: tab.windowId });
     window.close();
   });
+  
+  row.querySelector('.tab-move').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (customGroups.length === 0) {
+      toast('Create a custom group first via the bottom of the sidebar!', 'warn');
+      return;
+    }
+    const labels = customGroups.map((g, i) => `${i+1}: ${g.label}`).join('\n');
+    const choice = prompt(`Move tab to custom group (enter number):\n${labels}\n\nType 0 to remove from manual group.`);
+    if (choice === '0') {
+       await msg('SET_TAB_MANUAL_GROUP', { tabId: tab.id, groupId: null });
+       await reload();
+       return;
+    }
+    const idx = parseInt(choice) - 1;
+    if (customGroups[idx]) {
+      await msg('SET_TAB_MANUAL_GROUP', { tabId: tab.id, groupId: customGroups[idx].id });
+      await reload();
+    }
+  });
+
   row.querySelector('.tab-close').addEventListener('click', async (e) => {
     e.stopPropagation();
     await msg('CLOSE_TABS', { tabIds: [tab.id] });
@@ -331,8 +399,20 @@ function renderPaletteResults(tabs) {
 
 // ===== AI Clustering =====
 async function runAiCluster() {
-  if (!settings.apiKey) {
+  const provider = settings.aiProvider || 'local';
+  
+  if (provider === 'local' && (!window.ai || !window.ai.languageModel)) {
+    toast('Local AI not found. Please enable chrome://flags/#prompt-api-for-extension', 'error');
+    document.getElementById('settings-panel').classList.remove('hidden');
+    return;
+  }
+  if (provider === 'anthropic' && !settings.anthropicKey) {
     toast('Add your Anthropic API key in Settings first', 'error');
+    document.getElementById('settings-panel').classList.remove('hidden');
+    return;
+  }
+  if (provider === 'gemini' && !settings.geminiKey) {
+    toast('Add your Gemini API key in Settings first', 'error');
     document.getElementById('settings-panel').classList.remove('hidden');
     return;
   }
@@ -342,8 +422,21 @@ async function runAiCluster() {
   btn.classList.add('loading');
 
   try {
-    const result = await aiCluster(allTabs, settings.apiKey);
-    groups = result;
+    const autoTabs = allTabs.filter(t => !t.manualGroupId || !customGroups.find(g => g.id === t.manualGroupId));
+    const result = await aiCluster(autoTabs, settings);
+    
+    // Merge manual groups with AI results
+    const manualMap = new Map();
+    for (const cg of customGroups) manualMap.set(cg.id, { ...cg, tabs: [], source: 'manual' });
+    for (const t of allTabs) {
+      if (t.manualGroupId && manualMap.has(t.manualGroupId)) {
+         manualMap.get(t.manualGroupId).tabs.push(t);
+      }
+    }
+    
+    groups = [...manualMap.values()].filter(g => g.tabs.length > 0);
+    groups.push(...result);
+    
     activeGroupId = '__all__';
     renderSidebar();
     renderMain();
@@ -375,16 +468,35 @@ async function restoreWorkspace(ws) {
   toast(`Restored: ${ws.name}`, 'success');
 }
 
+async function deleteWorkspace(id) {
+  if (!confirm('Delete this saved session?')) return;
+  await msg('DELETE_WORKSPACE', { id });
+  workspaces = await msg('GET_WORKSPACES');
+  renderSidebar();
+  toast('Session deleted', 'success');
+}
+
 // ===== Settings =====
 function openSettings() {
-  document.getElementById('setting-api-key').value = settings.apiKey || '';
+  document.getElementById('setting-ai-provider').value = settings.aiProvider || 'local';
+  document.getElementById('setting-anthropic-key').value = settings.anthropicKey || '';
+  document.getElementById('setting-gemini-key').value = settings.geminiKey || '';
   document.getElementById('setting-suspend-days').value = settings.autoSuspendDays || 7;
   document.getElementById('setting-dupes-warn').checked = settings.showDuplicateWarning !== false;
+  toggleApiFields();
   document.getElementById('settings-panel').classList.remove('hidden');
 }
 
+function toggleApiFields() {
+  const provider = document.getElementById('setting-ai-provider').value;
+  document.getElementById('row-anthropic-key').classList.toggle('hidden', provider !== 'anthropic');
+  document.getElementById('row-gemini-key').classList.toggle('hidden', provider !== 'gemini');
+}
+
 async function saveSettings() {
-  settings.apiKey = document.getElementById('setting-api-key').value.trim();
+  settings.aiProvider = document.getElementById('setting-ai-provider').value;
+  settings.anthropicKey = document.getElementById('setting-anthropic-key').value.trim();
+  settings.geminiKey = document.getElementById('setting-gemini-key').value.trim();
   settings.autoSuspendDays = parseInt(document.getElementById('setting-suspend-days').value) || 7;
   settings.showDuplicateWarning = document.getElementById('setting-dupes-warn').checked;
   await msg('SAVE_SETTINGS', { settings });
@@ -503,11 +615,26 @@ function bindEvents() {
   document.getElementById('btn-ai-cluster').addEventListener('click', runAiCluster);
 
   // Settings
+  document.getElementById('setting-ai-provider').addEventListener('change', toggleApiFields);
   document.getElementById('btn-settings').addEventListener('click', openSettings);
   document.getElementById('btn-settings-close').addEventListener('click', () => {
     document.getElementById('settings-panel').classList.add('hidden');
   });
   document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
+  
+  // Pop-out button
+  const btnPopout = document.getElementById('btn-popout');
+  if (btnPopout) {
+    btnPopout.addEventListener('click', () => {
+      chrome.windows.create({
+        url: 'popup/popup.html',
+        type: 'popup',
+        width: 780,
+        height: 560
+      });
+      window.close();
+    });
+  }
 }
 
 // ===== Start =====
